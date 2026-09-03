@@ -62,7 +62,17 @@ class ConversationAgent:
         system: str = prompts.SYSTEM_PROMPT,
         max_history_turns: int = config.MAX_HISTORY_TURNS,
     ) -> None:
-        self.client = client or genai.Client(api_key=config.GEMINI_API_KEY)
+        self.client = client or genai.Client(
+            api_key=config.GEMINI_API_KEY,
+            # O SDK não faz nenhuma retentativa por padrão (HttpRetryOptions
+            # ausente = "never retry"), então um 503 transitório ("high
+            # demand") do lado do Gemini sobe direto como exceção na primeira
+            # tentativa. HttpRetryOptions() com os campos default do próprio
+            # SDK já cobre 408/429/500/502/503/504 com backoff exponencial +
+            # jitter (5 tentativas, 1s a 60s) — bem mais razoável para um chat
+            # de atendimento do que estourar erro numa mensagem qualquer.
+            http_options=types.HttpOptions(retry_options=types.HttpRetryOptions()),
+        )
         self.model = model
         self.system = system
         self.max_history_turns = max_history_turns

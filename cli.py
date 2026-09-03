@@ -94,7 +94,17 @@ def main() -> None:
             try:
                 reply = agent.send(user_text)
             except Exception as exc:  # erro de rede/API — não derruba a sessão
-                reply = f"Desculpa, tive um problema técnico para responder agora ({exc})."
+                # O cliente do Gemini já reage sozinho a erros transitórios
+                # (retry com backoff — ver ConversationAgent.__init__); chegar
+                # aqui significa que isso não bastou (ex.: cota diária
+                # esgotada, chave inválida, sem internet). Não expõe o
+                # traceback bruto pro cliente — só registra em stderr, pra
+                # quem estiver rodando o CLI conseguir depurar.
+                print(f"[erro] falha ao chamar o modelo: {exc}", file=sys.stderr)
+                reply = (
+                    "Desculpa, tive um problema técnico para responder agora. "
+                    "Pode tentar de novo em instantes?"
+                )
             history.append(("assistant", reply))
             print(f"\nEmpório da Música: {reply}\n")
     except KeyboardInterrupt:

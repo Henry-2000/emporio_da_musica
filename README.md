@@ -93,6 +93,17 @@ histórico antigo nunca quebra um par `function_call`/`function_response` (ver
 mensagem no formato de cada API muda, o que se confirmou na prática ao trocar
 de provedor (ver "LLM e provedor" abaixo e o histórico do git).
 
+**Retentativa em erro transitório.** O `google-genai` não reenvia nada por
+padrão — sem configurar `retry_options` explicitamente, um `503` de alta
+demanda (comum no tier gratuito) sobe como exceção já na primeira tentativa,
+inclusive para uma mensagem trivial como "Boa tarde" (bug real encontrado
+durante o desenvolvimento, não hipotético). `ConversationAgent` passa
+`HttpRetryOptions()` na construção do cliente para ligar a política padrão do
+próprio SDK: até 5 tentativas com backoff exponencial + jitter (1s a 60s)
+para 408/429/500/502/503/504. Só depois de esgotar essas tentativas o erro
+chega ao usuário — e mesmo assim como mensagem genérica (o `cli.py` loga o
+erro real em stderr, não expõe o traceback no chat).
+
 **Por que não um "agente de SQL" com acesso livre?** O enunciado lista essa
 opção, mas optei por expor **funções parametrizadas e previsíveis**
 (`search_products`, `get_order_status` etc. — ver `src/agent/tools.py`) em vez
