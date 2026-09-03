@@ -39,9 +39,9 @@ source .venv/bin/activate        # Linux/macOS
 # 3. Instale as dependências
 pip install -r requirements.txt
 
-# 4. Configure a chave da API da Anthropic
+# 4. Configure a chave da API do Gemini
 cp .env.example .env             # Windows: copy .env.example .env
-# edite .env e cole sua ANTHROPIC_API_KEY (console.anthropic.com/settings/keys)
+# edite .env e cole sua GEMINI_API_KEY (chave gratuita em aistudio.google.com/apikey)
 
 # 5. Rode o chat
 python cli.py
@@ -59,9 +59,8 @@ Para rodar os testes automatizados (camada de dados e busca de políticas):
 python -m unittest discover -s tests -v
 ```
 
-Por padrão o agente usa `claude-sonnet-5`. Para trocar de modelo (ex.: testar
-com Haiku, mais barato), defina `EMPORIO_MODEL` no `.env` — veja
-`.env.example`.
+Por padrão o agente usa `gemini-3.5-flash-lite`. Para trocar de modelo, defina
+`GEMINI_MODEL` no `.env` — veja `.env.example`.
 
 ## Decisões técnicas
 
@@ -79,17 +78,20 @@ O agente é **híbrido**, como sugerido no enunciado:
 O próprio modelo decide, a cada mensagem, quais ferramentas chamar (zero, uma
 ou várias, inclusive em sequência) com base nas descrições das ferramentas e
 nas instruções do system prompt — não há um roteador/classificador manual
-antes do Claude. Isso é o teste real do "saber quando consultar dados e
+antes do Gemini. Isso é o teste real do "saber quando consultar dados e
 quando consultar políticas" pedido no desafio.
 
 O loop de chamada de ferramentas (`src/agent/core.py`) foi implementado **na
-mão**, sobre `client.messages.create`, em vez de usar o `tool_runner` beta do
-SDK Python. Motivo: para um protótipo pequeno como este, o loop manual deixa
-explícito — e fácil de revisar em code review — exatamente como o histórico é
-montado, como os resultados de ferramenta viram `tool_result`, e como o corte
-de histórico antigo nunca quebra um par `tool_use`/`tool_result` (ver
-`ConversationAgent._history_messages`). Também evita depender de uma API
-ainda em beta para o caminho principal do produto.
+mão**, sobre `client.models.generate_content`, com a chamada automática de
+função do SDK (`automatic_function_calling`) explicitamente desligada.
+Motivo: para um protótipo pequeno como este, o loop manual deixa explícito —
+e fácil de revisar em code review — exatamente como o histórico é montado,
+como os resultados de ferramenta viram `function_response`, e como o corte de
+histórico antigo nunca quebra um par `function_call`/`function_response` (ver
+`ConversationAgent._history_contents`). Também deixa o despacho de fato
+(`tools.execute_tool`) totalmente agnóstico de provedor — só quem monta a
+mensagem no formato de cada API muda, o que se confirmou na prática ao trocar
+de provedor (ver "LLM e provedor" abaixo e o histórico do git).
 
 **Por que não um "agente de SQL" com acesso livre?** O enunciado lista essa
 opção, mas optei por expor **funções parametrizadas e previsíveis**
@@ -101,25 +103,48 @@ alucinar uma coluna, gerar uma query lenta/perigosa, ou vazar dados de outro
 cliente. Fica registrado como algo a reconsiderar se o catálogo de perguntas
 crescer muito (ver Limitações).
 
-### LLM e provedor: Anthropic Claude, `claude-sonnet-5`
+### LLM e provedor: Google Gemini, `gemini-3.5-flash-lite`
 
-- **Provedor**: API da Anthropic — é o provedor com o assistente de código
-  usado neste desafio (Claude Code), então a integração e o troubleshooting
-  ficaram mais diretos; é a família de modelos com a qual eu tenho mais
-  familiaridade construindo agentes com tool use.
-- **Modelo**: `claude-sonnet-5` para o agente principal. Para um chat de
-  atendimento — várias chamadas de ferramenta por mensagem, latência
-  perceptível pelo cliente, volume potencialmente alto — Sonnet equilibra bem
-  qualidade de raciocínio (segue instruções de escopo/tom de forma
-  consistente, decide bem quando chamar cada ferramenta) e custo/latência
-  frente ao Opus. `claude-haiku-4-5` é uma alternativa mais barata e mais
-  rápida, viável para picos de volume ou para perguntas simples de catálogo,
-  mas nos meus testes durante o desenvolvimento (ver `examples/`) Sonnet foi
-  mais consistente ao seguir as instruções de escopo e ao encadear duas
-  ferramentas na mesma resposta (ex.: política de troca + disponibilidade do
-  modelo desejado) — importante justamente no cenário "não trivial" pedido no
-  desafio. Trocar de modelo é uma variável de ambiente (`EMPORIO_MODEL`), sem
-  mudar código.
+O projeto começou sobre a API da Anthropic (Claude Sonnet) e foi **migrado
+para a API do Gemini** depois — a motivação principal foi **custo**: o Google
+AI Studio oferece um tier gratuito genuíno (sem cartão de crédito, sem
+crédito pago para gastar), o que permite prototipar, testar e regenerar os
+exemplos deste README quantas vezes forem necessárias sem gastar nada — algo
+que esbarrou num problema real durante o desenvolvimento com a API da
+Anthropic (paga desde a primeira chamada; ver "Uso de assistentes de IA" para
+o relato completo). Para um desafio de portfólio/processo seletivo, onde o
+projeto pode ser reexecutado e reavaliado várias vezes, essa diferença
+importa mais do que para um produto em produção com orçamento já aprovado.
+
+- **Provedor**: API do Gemini (`google-genai`, o SDK oficial atual — não o
+  pacote `google-generativeai`, descontinuado).
+- **Modelo**: `gemini-3.5-flash-lite` é o padrão. Essa escolha específica só
+  ficou clara testando de verdade contra a API (não por documentação/memória
+  — modelos e cotas mudam rápido demais para confiar em conhecimento
+  desatualizado):
+  - `gemini-2.5-flash` (pedido inicialmente) devolve `404 NOT_FOUND` —
+    "This model ... is no longer available to new users".
+  - O substituto que a própria mensagem de erro recomenda,
+    `gemini-3.6-flash`, funciona, mas o tier gratuito dele tem cota de
+    **20 requisições/dia por projeto** — a própria bateria de testes deste
+    desafio (alguns smoke tests + os 5 exemplos, cada um com 2 turnos) já
+    estoura esse limite, então não é um modelo viável para prototipar sem
+    custo, mesmo sendo "gratuito" em tese.
+  - `gemini-3.5-flash-lite` (nível "lite") funcionou de ponta a ponta sem
+    esbarrar em cota nenhuma vez durante todo o desenvolvimento — inclusive
+    para regerar os 5 exemplos em `examples/` (ver mais abaixo). Nível
+    "lite" tende a ter cota gratuita bem mais generosa que o "flash" cheio,
+    o que faz sentido para o caso de uso daqui: várias chamadas de
+    ferramenta por mensagem, custo/latência importam mais que ter o modelo
+    mais "raciocinador" da linha.
+  - Nos testes manuais feitos durante o desenvolvimento (não uma avaliação
+    formal — ver Limitações), `gemini-3.5-flash-lite` seguiu bem as
+    instruções de escopo/tom e encadeou corretamente duas ferramentas na
+    mesma resposta (política de devolução + status de um pedido real — ver
+    `examples/04_devolucao_e_status_pedido.md`).
+  - Trocar de modelo é uma variável de ambiente (`GEMINI_MODEL`), sem mudar
+    código — útil já que a disponibilidade de modelo nessa API mudou de
+    verdade dentro desta mesma sessão de desenvolvimento.
 
 ### Arquitetura de retrieval: chunking por seção + BM25 (sem embeddings)
 
@@ -169,7 +194,7 @@ pergunta.
 
 Em memória durante a sessão do processo (`ConversationAgent` mantém o
 histórico completo, por "turno", para nunca cortar um par
-`tool_use`/`tool_result` ao aparar histórico antigo — ver
+`function_call`/`function_response` ao aparar histórico antigo — ver
 `max_history_turns` em `src/agent/config.py`). O CLI também salva um log em
 Markdown de cada sessão em `conversations/` ao sair, útil para depuração e
 para revisar conversas passadas — mas não é um requisito de produto em si
@@ -204,22 +229,18 @@ emporio-da-musica-agent/
 │   └── core.py                 # loop de conversa e chamada de ferramentas
 ├── tests/                     # testes da camada de dados e de busca de políticas
 ├── examples/                  # 5 conversas de exemplo (entregável do desafio)
+├── scripts/generate_examples.py  # gera examples/ rodando o agente de verdade
 └── requirements.txt
 ```
 
 ## Exemplos de conversa
 
-Ver a pasta [`examples/`](examples/) — 5 conversas cobrindo os cenários do
-desafio. **Nota de transparência:** a conta de API usada para testar este
-projeto ficou sem crédito no momento de gerar os exemplos (a Anthropic API é
-paga, sem tier gratuito), então essas 5 conversas foram **escritas à mão**
-em vez de capturadas de uma chamada real a `claude-sonnet-5` — mas com base
-em saídas reais das ferramentas do agente (`search_products`,
-`get_product_by_name`, `get_order_status`, `search_policies`), rodadas de
-verdade contra os dados deste projeto (inclusive a conta de dias corridos no
-exemplo 4). Cada arquivo tem uma nota igual a esta no topo. `scripts/generate_examples.py`
-está pronto para regenerar os 5 arquivos com chamadas reais ao modelo assim
-que houver crédito disponível — ver README > "Uso de assistentes de IA".
+Ver a pasta [`examples/`](examples/) — 5 conversas reais com o agente
+(`gemini-3.5-flash-lite`, via `cli.py`/`scripts/generate_examples.py`),
+cobrindo os cenários do desafio. São transcrições de chamadas reais à API do
+Gemini contra os dados deste projeto, não conversas inventadas — rode
+`python scripts/generate_examples.py` (com `GEMINI_API_KEY` configurada) para
+regerá-las a qualquer momento.
 
 1. [`01_busca_por_categoria_e_preco.md`](examples/01_busca_por_categoria_e_preco.md)
    — busca no catálogo por categoria e faixa de preço.
@@ -267,6 +288,16 @@ que houver crédito disponível — ver README > "Uso de assistentes de IA".
   desconto (`store_data._attach_promotion`), já que o manual diz que
   promoções não são cumulativas — mas o CSV fornecido nunca teve esse caso
   na prática, então não há teste automatizado específico para ele.
+- **Disponibilidade e cota de modelo mudam rápido.** Durante o desenvolvimento,
+  um modelo pedido explicitamente (`gemini-2.5-flash`) ficou indisponível
+  para chaves novas, e o substituto sugerido pela própria API
+  (`gemini-3.6-flash`) tinha cota gratuita baixa demais para uso real (20
+  requisições/dia). Não há verificação automática de "esse modelo ainda
+  existe e tem cota suficiente" no código — se `GEMINI_MODEL` apontar para um
+  modelo desativado/sem cota, o erro só aparece na primeira chamada. Com mais
+  tempo, valeria checar `client.models.list()` na inicialização e falhar
+  cedo com uma mensagem clara, em vez de deixar o erro estourar no meio de
+  uma conversa com o cliente.
 
 ## Uso de assistentes de IA
 
@@ -304,21 +335,43 @@ transparência, como pedido no enunciado:
   ferramentas/prompt → loop do agente → CLI), rodando os testes e consultas
   manuais de verificação a cada módulo novo antes de seguir para o próximo,
   em vez de gerar o projeto inteiro de uma vez.
-- **Geração dos exemplos de conversa**: o plano original era capturar as 5
-  conversas rodando `cli.py`/`scripts/generate_examples.py` de verdade contra
-  a API — o script existe pronto para isso. Na prática, a conta de API usada
-  para testes ficou sem crédito (a API da Anthropic não tem tier gratuito)
-  bem no momento de gerar os exemplos finais, o que só foi descoberto ao
-  tentar rodar o script e receber `400 invalid_request_error: Your credit
-  balance is too low`. Diante disso, encontrar uma alternativa sem custo era
-  a decisão a tomar: como pedido no enunciado do desafio ("assuma uma
-  interpretação razoável, documente a suposição e siga em frente"), optei por
-  escrever as 5 conversas à mão, mas com os números vindos de saídas reais
-  das funções de `store_data.py`/`policy_search.py` (rodadas de verdade
-  contra os dados do projeto) — não são preços/estoques/prazos inventados,
-  só a redação final do texto do assistente não veio de uma chamada ao
-  modelo. Isso está documentado no topo de cada arquivo em `examples/`, para
-  não passar a impressão de ser uma transcrição bruta quando não é.
+- **Geração dos exemplos de conversa**: na primeira versão do projeto (sobre
+  a API da Anthropic), a conta usada para testes ficou sem crédito
+  (`400 invalid_request_error: Your credit balance is too low`) bem no
+  momento de gerar os exemplos finais — a API da Anthropic é paga desde a
+  primeira chamada, sem tier gratuito. Diante disso, segui a orientação do
+  próprio enunciado ("assuma uma interpretação razoável, documente a
+  suposição e siga em frente") e escrevi as 5 conversas à mão, com os números
+  vindos de saídas reais de `store_data.py`/`policy_search.py` (não
+  inventados, só a redação do assistente não veio de uma chamada ao modelo) —
+  documentado no topo de cada arquivo em `examples/` naquele momento. Depois
+  da troca de provedor para o Gemini (ver "LLM e provedor"), com tier
+  gratuito de verdade disponível, rodei `scripts/generate_examples.py` contra
+  a API de verdade e substituí os 5 arquivos por transcrições reais — não há
+  mais nenhum exemplo "escrito à mão" no repositório.
+- **Troca de provedor Anthropic → Gemini**: pedida explicitamente numa
+  mensagem separada, depois do projeto já funcionando. Antes de escrever
+  qualquer código Gemini, pedi ao Claude Code para não confiar em memória
+  de treinamento para a forma exata do SDK `google-genai` (nomes de classe,
+  assinatura de métodos) — WebFetch nas docs oficiais trouxe uma resposta
+  visivelmente desatualizada/inconsistente (mencionava uma "Interactions
+  API" e um modelo `gemini-3.8-flash` que não bateu com o pacote real), então
+  a fonte de verdade usada foi **introspecção do pacote `google-genai`
+  realmente instalado no venv** (`inspect.signature`, `model_fields`,
+  `inspect.getsource`) — mais lento que confiar num resumo de doc, mas
+  elimina a alucinação de API. Isso também pegou, na prática e não só em
+  teoria, que o modelo pedido inicialmente (`gemini-2.5-flash`) retorna 404
+  para chaves novas, e que o substituto sugerido pela própria API
+  (`gemini-3.6-flash`) tem cota gratuita baixa demais (20 requisições/dia)
+  para o fluxo de trabalho deste projeto — o que só apareceu rodando
+  chamadas reais contra a API, não checando documentação. Cada decisão dessas
+  (qual modelo usar, como reagir ao erro 404, como reagir à cota) foi
+  levantada como pergunta explícita antes de eu seguir em frente, em vez de
+  escolhida silenciosamente. Antes de mexer em qualquer arquivo de config,
+  também verifiquei o histórico do git inteiro (`git log --all -p`) atrás do
+  valor de uma eventual chave de API da Anthropic vazada — só o placeholder
+  `sk-ant-...` do `.env.example` apareceu; a chave real nunca foi commitada
+  (`.env` sempre esteve fora do controle de versão).
 - **Controle de versão**: os commits foram feitos incrementalmente ao longo
   do desenvolvimento (dados → camada de dados → busca de políticas →
   ferramentas/prompt/loop/CLI → exemplos → README), refletindo o progresso
