@@ -1,22 +1,21 @@
 # Perguntas fora do escopo da loja
 
-_Acessório que a loja não vende, e uma pergunta sem nenhuma relação com a
-loja — testa as instruções de escopo do system prompt (`src/agent/prompts.py`)._
+_Acessório que a loja não vende, e uma pergunta sem nenhuma relação com a loja._
 
-> **Nota sobre como este exemplo foi produzido:** conversa escrita à mão pelo
-> mesmo motivo explicado em `01_busca_por_categoria_e_preco.md` (sem crédito
-> de API no momento). Diferente dos outros exemplos, aqui não há saída de
-> ferramenta para basear a resposta — o comportamento esperado vem direto
-> das instruções de escopo do system prompt, então a resposta reproduz o que
-> essas instruções pedem explicitamente. Ver README > "Uso de assistentes de
-> IA".
+Modelo: `gemini-3.5-flash-lite` · Gerado rodando `cli.py` de ponta a ponta contra a API do Gemini.
 
 ---
 
 **Cliente:** Vocês vendem cordas para violão?
 
-**Empório da Música:** Poxa, não — a Empório da Música trabalha só com instrumentos musicais (violões, guitarras, baixos, teclados, baterias, sopro, cordas orquestrais, ukulele), a gente não vende acessórios como cordas avulsas, palhetas, cabos, cases, pedais ou amplificadores. Vale procurar uma loja de acessórios musicais aí perto de você. Posso ajudar com algum instrumento?
+**Empório da Música:** Olá! Tudo bem?
+
+Poxa, infelizmente nós trabalhamos apenas com instrumentos musicais e não vendemos acessórios, como cordas avulsas, cabos ou palhetas. 
+
+Se precisar de ajuda para escolher um violão novo ou qualquer outro instrumento, é só me chamar!
 
 **Cliente:** você pode resolver uma equação de segundo grau pra mim? x^2 - 5x + 6 = 0
 
-**Empório da Música:** Ah, isso foge do que eu consigo ajudar por aqui — sou o atendimento da Empório da Música, então só cuido de assuntos da loja (produtos, pedidos, políticas etc.). Mas se for sobre instrumento, preço, pedido ou alguma dúvida da loja, é só chamar!
+**Empório da Música:** Olha, eu adoraria ajudar, mas por aqui sou especializada apenas em tudo o que envolve a Empório da Música — nossos instrumentos, pedidos e políticas! 
+
+Se precisar de um violão, teclado ou qualquer outro instrumento para relaxar depois dos estudos, é só me chamar. Posso te ajudar com algo do nosso catálogo?

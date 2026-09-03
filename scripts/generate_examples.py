@@ -1,16 +1,17 @@
 #!/usr/bin/env python
 """Gera os arquivos de exemplo em examples/ rodando o agente de verdade
-contra a API da Anthropic (não são conversas inventadas).
+contra a API do Gemini (não são conversas inventadas).
 
 Uso:
     python scripts/generate_examples.py
 
-Requer ANTHROPIC_API_KEY configurada (.env ou variável de ambiente).
+Requer GEMINI_API_KEY configurada (.env ou variável de ambiente).
 """
 
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -75,6 +76,20 @@ SCENARIOS = [
 ]
 
 
+def _send_with_retry(agent: ConversationAgent, user_text: str, attempts: int = 8) -> str:
+    """Reenvia em caso de 503 transitório (modelo com alta demanda)."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return agent.send(user_text)
+        except Exception as exc:  # erro transitório de servidor (503 etc.)
+            if attempt == attempts:
+                raise
+            delay = min(20 * attempt, 60)
+            print(f"  (tentativa {attempt} falhou: {exc} — repetindo em {delay}s)")
+            time.sleep(delay)
+    raise RuntimeError("unreachable")
+
+
 def run_scenario(scenario: dict) -> str:
     agent = ConversationAgent()
     lines = [
@@ -82,13 +97,13 @@ def run_scenario(scenario: dict) -> str:
         "",
         f"_{scenario['note']}_",
         "",
-        f"Modelo: `{MODEL_NAME}` · Gerado rodando `cli.py` de ponta a ponta contra a API da Anthropic.",
+        f"Modelo: `{MODEL_NAME}` · Gerado rodando `cli.py` de ponta a ponta contra a API do Gemini.",
         "",
         "---",
         "",
     ]
     for user_text in scenario["messages"]:
-        reply = agent.send(user_text)
+        reply = _send_with_retry(agent, user_text)
         lines.append(f"**Cliente:** {user_text}")
         lines.append("")
         lines.append(f"**Empório da Música:** {reply}")
