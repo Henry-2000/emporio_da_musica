@@ -9,11 +9,36 @@ histórico é montado — ver README > "Framework / abordagem do agente".
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 import anthropic
 
 from . import config, prompts, tools
+
+_WEEKDAYS_PT = [
+    "segunda-feira",
+    "terça-feira",
+    "quarta-feira",
+    "quinta-feira",
+    "sexta-feira",
+    "sábado",
+    "domingo",
+]
+
+
+def _current_date_note() -> str:
+    """Contexto de data/hora atual, anexado ao system prompt em cada envio.
+
+    Necessário para o modelo raciocinar sobre prazos relativos a uma data
+    (ex.: "esse pedido foi entregue há quantos dias? ainda dá para devolver
+    dentro do prazo de 7 dias?") — sem isso ele não tem como saber "hoje".
+    Recalculado a cada chamada (não fixado no import) para a sessão do CLI
+    continuar correta se atravessar a meia-noite.
+    """
+    now = datetime.now()
+    weekday = _WEEKDAYS_PT[now.weekday()]
+    return f"\n\n# Data e hora atuais\nHoje é {weekday}, {now.strftime('%d/%m/%Y')}, {now.strftime('%H:%M')}."
 
 
 class ConversationAgent:
@@ -61,11 +86,13 @@ class ConversationAgent:
         turn: list[dict[str, Any]] = [{"role": "user", "content": user_text}]
         response = None
 
+        system_with_date = self.system + _current_date_note()
+
         for _ in range(config.MAX_TOOL_ITERATIONS):
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=config.MAX_TOKENS,
-                system=self.system,
+                system=system_with_date,
                 tools=tools.TOOL_DEFINITIONS,
                 messages=self._history_messages() + turn,
             )
