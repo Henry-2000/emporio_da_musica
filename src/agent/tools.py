@@ -4,11 +4,21 @@ Cada ferramenta é uma consulta parametrizada e previsível sobre os dados da
 loja (store_data.py) ou sobre o manual de políticas (policy_search.py) — não
 há uma ferramenta de "SQL livre" ou "pergunte qualquer coisa ao PDF"; ver a
 justificativa em store_data.py e no README > "Por que não um agente de SQL".
+
+`TOOL_DEFINITIONS` guarda nome/descrição/schema em JSON Schema simples — o
+mesmo formato que a Gemini API aceita via `parameters_json_schema`, então o
+schema não precisa ser reescrito na troca de provedor, só empacotado em
+`types.FunctionDeclaration`/`types.Tool` (ver `GEMINI_TOOL` no fim do
+arquivo). `execute_tool` (o despacho de fato) também é agnóstico de
+provedor: recebe nome + dict de argumentos, devolve um valor Python
+serializável — quem monta a mensagem específica de cada API é `core.py`.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from google.genai import types
 
 from . import policy_search, store_data
 
@@ -166,3 +176,19 @@ def execute_tool(name: str, tool_input: dict[str, Any]) -> Any:
         return policy_search.search_policies(tool_input["query"])
 
     raise ValueError(f"Ferramenta desconhecida: {name}")
+
+
+# Empacota TOOL_DEFINITIONS no formato que a Gemini API espera. Usamos
+# `parameters_json_schema` (aceita o dicionário de JSON Schema como está,
+# sem reescrever para o dialeto `types.Schema` do Gemini) em vez de
+# `parameters` — ver README > "Framework / abordagem do agente".
+GEMINI_TOOL = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name=tool_def["name"],
+            description=tool_def["description"],
+            parameters_json_schema=tool_def["input_schema"],
+        )
+        for tool_def in TOOL_DEFINITIONS
+    ]
+)

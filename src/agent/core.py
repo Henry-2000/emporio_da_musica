@@ -1,18 +1,22 @@
 """Loop de conversa e chamada de ferramentas (agentic loop) do agente.
 
-Implementado como um loop manual sobre `client.messages.create` (em vez do
-`tool_runner` beta do SDK) para deixar explícito, com fins didáticos e de
-robustez, exatamente quando o agente decide chamar uma ferramenta e como o
-histórico é montado — ver README > "Framework / abordagem do agente".
+Implementado como um loop manual sobre `client.models.generate_content` (com
+a chamada automática de função do SDK desligada via
+`automatic_function_calling.disable=True`) para deixar explícito, com fins
+didáticos e de robustez, exatamente quando o agente decide chamar uma
+ferramenta e como o histórico é montado — ver README > "Framework /
+abordagem do agente". A estrutura do loop é a mesma independente do provedor
+de LLM (só a "forma" das mensagens/ferramentas muda) — ver histórico do git
+para a versão original sobre a API da Anthropic, antes da troca de provedor.
 """
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any
 
-import anthropic
+from google import genai
+from google.genai import types
 
 from . import config, prompts, tools
 
@@ -47,63 +51,65 @@ class ConversationAgent:
     O histórico é guardado por "turno" (uma mensagem do usuário + tudo que o
     modelo fez para respondê-la, incluindo idas e vindas de ferramenta) para
     que o corte de histórico antigo (`max_history_turns`) nunca quebre um par
-    tool_use/tool_result no meio — a API rejeita um `tool_result` sem o
-    `tool_use` correspondente na mesma janela de mensagens.
+    function_call/function_response no meio — a API espera a resposta de uma
+    chamada de função logo após o turno do modelo que a pediu.
     """
 
     def __init__(
         self,
-        client: anthropic.Anthropic | None = None,
+        client: genai.Client | None = None,
         model: str = config.MODEL_NAME,
         system: str = prompts.SYSTEM_PROMPT,
         max_history_turns: int = config.MAX_HISTORY_TURNS,
     ) -> None:
-        self.client = client or anthropic.Anthropic()
+        self.client = client or genai.Client(api_key=config.GEMINI_API_KEY)
         self.model = model
         self.system = system
         self.max_history_turns = max_history_turns
-        self._turns: list[list[dict[str, Any]]] = []
+        self._turns: list[list[types.Content]] = []
 
-    def _history_messages(self) -> list[dict[str, Any]]:
+    def _history_contents(self) -> list[types.Content]:
         recent_turns = self._turns[-self.max_history_turns :] if self.max_history_turns else self._turns
-        return [message for turn in recent_turns for message in turn]
+        return [content for turn in recent_turns for content in turn]
 
-    def _run_tool(self, block: Any) -> dict[str, Any]:
+    def _run_tool(self, function_call: types.FunctionCall) -> types.Part:
         try:
-            result = tools.execute_tool(block.name, block.input)
-            content = json.dumps(result, ensure_ascii=False, default=str)
-            return {"type": "tool_result", "tool_use_id": block.id, "content": content}
+            result = tools.execute_tool(function_call.name, function_call.args or {})
+            response_payload: dict[str, Any] = {"result": result}
         except Exception as exc:  # nunca deixar uma ferramenta com erro travar o loop
-            return {
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": f"Erro ao executar a ferramenta '{block.name}': {exc}",
-                "is_error": True,
-            }
+            response_payload = {"error": f"Erro ao executar a ferramenta '{function_call.name}': {exc}"}
+        return types.Part.from_function_response(name=function_call.name, response=response_payload)
 
     def send(self, user_text: str) -> str:
         """Envia uma mensagem do usuário e devolve a resposta final em texto."""
-        turn: list[dict[str, Any]] = [{"role": "user", "content": user_text}]
+        turn: list[types.Content] = [types.Content(role="user", parts=[types.Part(text=user_text)])]
         response = None
 
-        system_with_date = self.system + _current_date_note()
+        generate_config = types.GenerateContentConfig(
+            system_instruction=self.system + _current_date_note(),
+            tools=[tools.GEMINI_TOOL],
+            max_output_tokens=config.MAX_TOKENS,
+            # Ferramentas são despachadas na mão (tools.execute_tool), não por
+            # funções Python passadas direto ao SDK — desliga a chamada
+            # automática de função para não competir com esse loop manual.
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
 
         for _ in range(config.MAX_TOOL_ITERATIONS):
-            response = self.client.messages.create(
+            response = self.client.models.generate_content(
                 model=self.model,
-                max_tokens=config.MAX_TOKENS,
-                system=system_with_date,
-                tools=tools.TOOL_DEFINITIONS,
-                messages=self._history_messages() + turn,
+                contents=self._history_contents() + turn,
+                config=generate_config,
             )
-            turn.append({"role": "assistant", "content": response.content})
+            model_content = response.candidates[0].content
+            turn.append(model_content)
 
-            if response.stop_reason != "tool_use":
+            function_calls = response.function_calls
+            if not function_calls:
                 break
 
-            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
-            tool_results = [self._run_tool(block) for block in tool_use_blocks]
-            turn.append({"role": "user", "content": tool_results})
+            result_parts = [self._run_tool(fc) for fc in function_calls]
+            turn.append(types.Content(role="user", parts=result_parts))
         else:
             # Excedeu MAX_TOOL_ITERATIONS sem terminar — evita loop infinito
             # e ainda assim guarda o turno para não perder o contexto.
@@ -115,8 +121,7 @@ class ConversationAgent:
 
         self._turns.append(turn)
         assert response is not None
-        text_blocks = [b.text for b in response.content if b.type == "text"]
-        return "\n".join(text_blocks).strip()
+        return (response.text or "").strip()
 
     def reset(self) -> None:
         """Limpa o histórico da sessão (equivalente a começar uma nova conversa)."""

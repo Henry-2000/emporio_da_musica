@@ -37,11 +37,12 @@ CONVERSATIONS_DIR = Path(__file__).resolve().parent / "conversations"
 
 
 def _check_api_key() -> None:
-    if not config.ANTHROPIC_API_KEY:
+    if not config.GEMINI_API_KEY:
         print(
-            "AVISO: variável de ambiente ANTHROPIC_API_KEY não encontrada.\n"
+            "AVISO: variável de ambiente GEMINI_API_KEY não encontrada.\n"
             "Configure-a (por exemplo em um arquivo .env na raiz do projeto — "
-            "veja .env.example) antes de rodar o agente.",
+            "veja .env.example) antes de rodar o agente. Uma chave gratuita "
+            "pode ser gerada em https://aistudio.google.com/apikey.",
             file=sys.stderr,
         )
         sys.exit(1)

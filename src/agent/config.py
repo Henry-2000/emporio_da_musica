@@ -25,12 +25,16 @@ CSV_FILES = {
     "promotions": DATA_DIR / "promotions.csv",
 }
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Modelo principal do agente. Sonnet equilibra qualidade e custo para um
-# fluxo conversacional com várias chamadas de ferramenta por interação.
-# Ver README > "Decisões técnicas" para a justificativa completa.
-MODEL_NAME = os.environ.get("EMPORIO_MODEL", "claude-sonnet-5")
+# Modelo principal do agente. `gemini-2.5-flash` (a escolha original) retorna
+# 404 para chaves novas ("no longer available to new users"); o substituto
+# que a própria API recomenda, `gemini-3.6-flash`, funciona mas tem cota
+# gratuita de só 20 requisições/dia — não sobrevive nem a uma sessão de teste.
+# `gemini-3.5-flash-lite` (nível "lite") funcionou sem esbarrar em cota
+# durante o desenvolvimento — ver README > "Decisões técnicas" para o
+# histórico completo dessa descoberta e a justificativa.
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 MAX_TOKENS = 2048
 
