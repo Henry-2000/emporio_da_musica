@@ -32,7 +32,12 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 # Ver README > "Decisões técnicas" para a justificativa completa.
 MODEL_NAME = os.environ.get("EMPORIO_MODEL", "claude-sonnet-5")
 
-MAX_TOKENS = 1024
+MAX_TOKENS = 2048
+
+# Trava de segurança para o loop de tool-use: número máximo de idas e vindas
+# de ferramenta dentro de uma única mensagem do usuário, para nunca travar
+# em loop caso o modelo insista em chamar ferramentas indefinidamente.
+MAX_TOOL_ITERATIONS = 6
 
 # Quantos turnos de histórico (pares usuário/assistente) manter no contexto
 # enviado ao modelo. Evita custo/latência crescendo sem limite em sessões longas.
