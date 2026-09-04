@@ -33,35 +33,79 @@ Modelo padrão: `gemini-3.5-flash-lite`. Para trocar, defina `GEMINI_MODEL` no
 
 ## Decisões técnicas
 
-- **Agente híbrido, loop manual de tool-use** (`src/agent/core.py`): function
-  calling sobre SQLite (dados estruturados, carregado dos CSVs em memória) +
-  RAG leve sobre o PDF (políticas). O próprio Gemini decide, a cada mensagem,
-  quais ferramentas chamar — sem roteador manual. Loop implementado à mão
-  (não `automatic_function_calling`) para deixar explícito como o histórico é
-  montado e nunca cortar um par `function_call`/`function_response`.
-  Ferramentas parametrizadas (`src/agent/tools.py`) em vez de SQL livre, para
-  evitar alucinação de query. Retentativa automática (`HttpRetryOptions`) em
-  erros transitórios (503 etc.), comuns no tier gratuito.
-- **LLM: Google Gemini** (`google-genai`), modelo `gemini-3.5-flash-lite`.
-  Migrado da API da Anthropic por custo (tier gratuito genuíno vs. paga desde
-  a primeira chamada — ver detalhes em "Uso de assistentes de IA"). Escolha
-  do modelo testada na prática: `gemini-2.5-flash` retorna 404 para chaves
-  novas; `gemini-3.6-flash` tem cota gratuita baixa (20 req/dia); `-lite`
-  funcionou sem esbarrar em cota.
-- **Retrieval de políticas: chunking por seção + BM25, sem embeddings**
-  (`src/agent/policy_search.py`). O manual tem 8 páginas e 10 seções
-  numeradas — overkill usar embeddings/vetor. Um chunk por seção de primeiro
-  nível, indexado com BM25 e um stemmer leve (corta tokens em 5 caracteres,
-  necessário para casar "devolver" com "devolução"). A seção sobre tom/fluxo
-  de atendimento foi incorporada direto no system prompt, não só na busca.
-- **Prompt único** (`src/agent/prompts.py`): persona, escopo, regra de nunca
-  inventar preço/estoque/status/política, e tratamento de casos especiais
-  (esgotado, descontinuado, pedido não encontrado etc.).
-- **Histórico em memória** por processo, sem persistência em banco entre
-  execuções (fora do escopo do desafio); log em Markdown salvo por sessão.
+### Framework / abordagem do agente
 
-Justificativas completas de cada decisão (com trade-offs considerados) estão
-comentadas no código correspondente.
+**Híbrido**, com loop manual de tool-use (`src/agent/core.py`): **function
+calling** sobre um SQLite em memória para dados estruturados e mutáveis
+(produto, preço, estoque, status de pedido) e **RAG leve por busca lexical
+(BM25)**, sem embeddings, sobre o PDF de políticas
+(`src/agent/policy_search.py`) — um manual de 8 páginas e 10 seções não
+justifica o custo/complexidade de um índice vetorial; um chunk por seção,
+indexado com BM25 e um stemmer leve (necessário para casar "devolver" com
+"devolução" no manual), resolveu bem as perguntas testadas. O próprio modelo
+decide, a cada mensagem, quais ferramentas chamar (zero, uma ou várias) com
+base nas descrições das ferramentas e no system prompt (`src/agent/prompts.py`,
+que fixa persona, escopo e a regra de nunca inventar preço/estoque/status/
+política) — não há roteador manual antes do Gemini, o que é o teste real de
+"saber quando consultar dados vs. políticas". Preferi ferramentas
+parametrizadas e previsíveis (`search_products`, `get_order_status` etc., em
+`src/agent/tools.py`) a um agente de SQL livre, pelo risco de o modelo
+alucinar uma coluna, gerar uma query lenta ou vazar dados de outro cliente. O
+loop de chamada de ferramentas foi escrito à mão (`automatic_function_calling`
+do SDK desligado) para deixar explícito como o histórico é montado e garantir
+que um par `function_call`/`function_response` nunca seja cortado ao aparar
+histórico antigo — e inclui retentativa automática (`HttpRetryOptions`) em
+erros transitórios do provedor (503 etc.), comuns no tier gratuito.
+
+### Modelo e provedor
+
+**Google Gemini** (`google-genai`, SDK oficial), modelo `gemini-3.5-flash-lite`.
+Comecei com a API da Anthropic (Claude Sonnet) e migrei por **custo**: o
+Google AI Studio tem tier gratuito genuíno (sem cartão de crédito), o que
+permite reexecutar e regerar os exemplos deste desafio quantas vezes forem
+necessárias sem gastar nada — a conta de teste da Anthropic, paga desde a
+primeira chamada, ficou sem crédito no meio do desenvolvimento (ver "Uso de
+assistentes de IA"). A escolha do modelo específico veio de teste real contra
+a API, não de documentação/memória: `gemini-2.5-flash` (pedido inicialmente)
+retorna `404 NOT_FOUND` para chaves novas; o substituto sugerido pelo próprio
+erro, `gemini-3.6-flash`, tem cota gratuita de só 20 requisições/dia — pouco
+até para a bateria de testes deste desafio; `gemini-3.5-flash-lite` funcionou
+de ponta a ponta sem esbarrar em cota, inclusive para regerar os 5 exemplos.
+Trocar de modelo é só uma variável de ambiente (`GEMINI_MODEL`), sem mudar
+código.
+
+### Interface de interação
+
+**CLI** (`cli.py`), com comandos simples (`/novo`, `/salvar`, `/sair`). Optei
+por isso porque o foco do desafio é o agente funcionando corretamente, não a
+interface — uma UI web ou notebook adicionaria superfície de implementação
+sem testar melhor o comportamento do agente (decisão de tool-use, retrieval
+de políticas, tratamento de casos especiais).
+
+### Persistência do histórico de conversa
+
+Em memória durante a sessão do processo, mantendo o histórico completo por
+"turno" para nunca cortar um par `function_call`/`function_response` ao
+aparar histórico antigo (`max_history_turns` em `src/agent/config.py`). Não
+implementei persistência em banco entre execuções porque nada no desafio pede
+retomar uma conversa entre execuções diferentes do processo. Ainda assim, o
+CLI salva um log em Markdown de cada sessão em `conversations/` (fora do
+controle de versão) ao sair — útil para depuração e revisão de conversas
+passadas, mas não um requisito de produto em si.
+
+### Tratamento dos dados
+
+Limpeza leve ao carregar os CSVs para o SQLite em memória
+(`src/agent/store_data.py`): conversão de tipos (preço/estoque para número),
+normalização de espaços em branco e de `status` (minúsculo), strings vazias
+viram `NULL`. Produtos com status `discontinued` ou `coming_soon`
+**não são escondidos** das buscas — o agente precisa poder explicar a
+situação ao cliente em vez de simplesmente informar "não encontrado". O
+preço com desconto de uma promoção ativa é pré-calculado em `store_data.py`
+(`price_with_promotion_brl`), para não deixar essa conta a cargo do modelo.
+
+Justificativas mais detalhadas, com trade-offs considerados, estão nos
+comentários do código correspondente a cada decisão.
 
 ## Estrutura do projeto
 
